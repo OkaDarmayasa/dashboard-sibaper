@@ -5,6 +5,7 @@ import io
 import uuid
 import sqlite3
 import os
+import time
 import plotly.express as px
 
 # --- ⚙️ KONFIGURASI HALAMAN ---
@@ -13,7 +14,7 @@ st.set_page_config(page_title="SiBAPER Dashboard", layout="wide", initial_sideba
 # Atasi FutureWarning Pandas
 pd.set_option('future.no_silent_downcasting', True)
 
-# Helper untuk memastikan URL valid (mencegah relative path localhost)
+# Helper untuk validasi URL aman
 def format_url(url):
     if not url:
         return "#"
@@ -33,7 +34,6 @@ conn = init_connection()
 
 def init_db():
     c = conn.cursor()
-    # Tabel Utama
     c.execute('''CREATE TABLE IF NOT EXISTS barang (
                     kode TEXT, nama TEXT PRIMARY KEY, kategori TEXT, 
                     jumlah REAL, satuan TEXT, last_updated TEXT)''')
@@ -74,9 +74,13 @@ def generate_dummy_data(c):
               (f"PRM-{str(uuid.uuid4())[:4].upper()}", (today - datetime.timedelta(days=5)).strftime("%Y-%m-%d"), "Irban Wilayah I", "Bahan Cetak", 5, "Rim", "Pengawasan Reguler", "Disetujui", "-"))
     c.execute("INSERT INTO req_barang VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
               (f"PRM-{str(uuid.uuid4())[:4].upper()}", (today - datetime.timedelta(days=1)).strftime("%Y-%m-%d"), "Irban Wilayah II", "Kertas dan Cover", 10, "Rim", "Stok ATK Ruangan", "Menunggu", "-"))
+    c.execute("INSERT INTO req_barang VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              (f"PRM-{str(uuid.uuid4())[:4].upper()}", (today - datetime.timedelta(days=2)).strftime("%Y-%m-%d"), "Subag UK", "Benda Pos", 5, "Pcs", "Arsip Dokumen", "Ditolak", "Stok Habis"))
+    c.execute("INSERT INTO req_barang VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              (f"PRM-{str(uuid.uuid4())[:4].upper()}", today.strftime("%Y-%m-%d"), "Irban Wilayah III", "Alat Listrik", 2, "Pcs", "aaaa", "Menunggu", "-"))
     
     c.execute("INSERT INTO req_bbm VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-              ("ST/001/2026", (today - datetime.timedelta(days=10)).strftime("%Y-%m-%d"), "Irban Wilayah I", "Monev Desa A", "DK 1111 A", 10, 118000, "Disetujui", "google.com", "Selesai", "-")) # Test tanpa https
+              ("ST/001/2026", (today - datetime.timedelta(days=10)).strftime("%Y-%m-%d"), "Irban Wilayah I", "Monev Desa A", "DK 1111 A", 10, 118000, "Disetujui", "google.com", "Selesai", "-"))
     c.execute("INSERT INTO laporan_bbm VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
               ("LAP-A1B2", "ST/001/2026", (today - datetime.timedelta(days=9)).strftime("%Y-%m-%d"), "Pertamax", 10, 118000, "google.com", "Selesai", "-"))
     
@@ -85,15 +89,19 @@ def load_initial_data():
     c.execute("SELECT COUNT(*) FROM barang")
     if c.fetchone()[0] == 0:
         excel_path = 'data/Persediaan barang.xlsx'
+        if not os.path.exists(excel_path):
+            excel_path = 'Persediaan barang.xlsx' # fallback jika di direktori utama
+            
         if os.path.exists(excel_path):
             try:
                 df_excel = pd.read_excel(excel_path).dropna(subset=['Jml Barang'])
+                
+                # Ambil total liter BBM untuk tabel settings
                 bbm_rows = df_excel[df_excel['Uraian (Nama Barang)'].str.contains("Bahan Bakar|Pelumas", case=False, na=False)]
                 total_bbm_awal = float(bbm_rows['Jml Barang'].sum()) if not bbm_rows.empty else 1000.0
-                
                 c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('total_liter_bbm', ?)", (str(total_bbm_awal),))
                 
-                df_excel = df_excel[~df_excel['Uraian (Nama Barang)'].str.contains("Bahan Bakar|Pelumas", case=False, na=False)]
+                # Masukkan SEMUA baris ke tabel barang (termasuk Bahan Bakar dan Pelumas)
                 today = datetime.date.today().strftime("%Y-%m-%d")
                 for _, row in df_excel.iterrows():
                     c.execute("INSERT OR IGNORE INTO barang (kode, nama, kategori, jumlah, satuan, last_updated) VALUES (?, ?, ?, ?, ?, ?)",
@@ -114,16 +122,19 @@ def load_initial_data():
 load_initial_data()
 
 def reset_database():
-    c = conn.cursor()
-    c.execute("DELETE FROM barang")
-    c.execute("DELETE FROM req_barang")
-    c.execute("DELETE FROM req_bbm")
-    c.execute("DELETE FROM laporan_bbm")
-    c.execute("DELETE FROM log_restok")
-    c.execute("DELETE FROM settings")
-    conn.commit()
-    load_initial_data()
-    st.success("✅ Database berhasil di-reset dan disinkronkan ulang dengan Excel!")
+    with st.spinner("🔄 Menghapus dan menyinkronkan ulang database..."):
+        time.sleep(0.8)
+        c = conn.cursor()
+        c.execute("DELETE FROM barang")
+        c.execute("DELETE FROM req_barang")
+        c.execute("DELETE FROM req_bbm")
+        c.execute("DELETE FROM laporan_bbm")
+        c.execute("DELETE FROM log_restok")
+        c.execute("DELETE FROM settings")
+        conn.commit()
+        load_initial_data()
+    st.success("✅ Database berhasil di-reset!")
+    time.sleep(0.5)
     st.rerun()
 
 # ==========================================
@@ -151,6 +162,8 @@ def login():
         password = st.text_input("Password *", type="password")
         if st.form_submit_button("Masuk", type="primary"):
             if username in USERS and USERS[username][0] == password:
+                with st.spinner("Autentikasi akun berhasil. Memuat dashboard..."):
+                    time.sleep(0.6)
                 st.session_state.logged_in = True
                 st.session_state.username = username
                 st.session_state.role = USERS[username][1]
@@ -160,6 +173,8 @@ def login():
                 st.error("Username atau Password salah!")
 
 def logout():
+    with st.spinner("Keluar dari sesi..."):
+        time.sleep(0.5)
     st.session_state.logged_in = False
     st.rerun()
 
@@ -224,13 +239,17 @@ if st.session_state.role == "admin_bagian":
                 if not kegiatan or barang_diminta == "-- Pilih Barang --":
                     st.error("Kegiatan dan Barang wajib diisi!")
                 else:
-                    satuan_barang = df_barang[df_barang['nama'] == barang_diminta]['satuan'].values[0]
-                    req_id = f"PRM-{str(uuid.uuid4())[:4].upper()}"
-                    c = conn.cursor()
-                    c.execute("INSERT INTO req_barang (id, tanggal, unit, barang, jumlah, satuan, keterangan, status, alasan_tolak) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                              (req_id, tanggal.strftime("%Y-%m-%d"), my_unit, barang_diminta, jumlah_diminta, satuan_barang, kegiatan, 'Menunggu', '-'))
-                    conn.commit()
+                    with st.spinner("Mengirim permohonan ke Super Admin..."):
+                        time.sleep(0.7)
+                        satuan_barang = df_barang[df_barang['nama'] == barang_diminta]['satuan'].values[0]
+                        req_id = f"PRM-{str(uuid.uuid4())[:4].upper()}"
+                        c = conn.cursor()
+                        c.execute("INSERT INTO req_barang (id, tanggal, unit, barang, jumlah, satuan, keterangan, status, alasan_tolak) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                  (req_id, tanggal.strftime("%Y-%m-%d"), my_unit, barang_diminta, jumlah_diminta, satuan_barang, kegiatan, 'Menunggu', '-'))
+                        conn.commit()
                     st.success("✅ Permohonan barang berhasil dikirim!")
+                    time.sleep(0.5)
+                    st.rerun()
 
     elif menu == "Permohonan BBM":
         st.title("Permohonan BBM")
@@ -254,11 +273,14 @@ if st.session_state.role == "admin_bagian":
                     if not no_st or not kegiatan or not kendaraan:
                         st.error("Semua field bertanda * wajib diisi!")
                     else:
-                        c = conn.cursor()
-                        c.execute("INSERT INTO req_bbm (id, tanggal, unit, kegiatan, kendaraan, liter, jumlah_pembelian, status, link_struk, status_laporan, alasan_tolak) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                  (no_st, tanggal.strftime("%Y-%m-%d"), my_unit, kegiatan, kendaraan, liter_diminta, liter_diminta * HARGA_BBM, 'Menunggu', '', 'Belum Dilaporkan', '-'))
-                        conn.commit()
+                        with st.spinner("Mendaftarkan Surat Tugas BBM..."):
+                            time.sleep(0.7)
+                            c = conn.cursor()
+                            c.execute("INSERT INTO req_bbm (id, tanggal, unit, kegiatan, kendaraan, liter, jumlah_pembelian, status, link_struk, status_laporan, alasan_tolak) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                      (no_st, tanggal.strftime("%Y-%m-%d"), my_unit, kegiatan, kendaraan, liter_diminta, liter_diminta * HARGA_BBM, 'Menunggu', '', 'Belum Dilaporkan', '-'))
+                            conn.commit()
                         st.success("✅ Permohonan BBM berhasil diajukan!")
+                        time.sleep(0.5)
                         st.rerun()
                         
     elif menu == "Pelaporan BBM":
@@ -286,13 +308,16 @@ if st.session_state.role == "admin_bagian":
                     if not link_struk:
                         st.error("Link Google Drive wajib diisi!")
                     else:
-                        c = conn.cursor()
-                        c.execute("UPDATE req_bbm SET link_struk = ?, status_laporan = 'Menunggu Verifikasi' WHERE id = ?", (link_struk, pilihan_st))
-                        no_lap = f"LAP-{str(uuid.uuid4())[:4]}"
-                        c.execute("INSERT INTO laporan_bbm (no_laporan, no_st, tanggal_struk, jenis_bbm, jumlah_liter, total_rp, link_struk, status_laporan, alasan_tolak) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                  (no_lap, pilihan_st, tgl_struk.strftime("%Y-%m-%d"), jenis_bbm, liter_aktual, liter_aktual * HARGA_BBM, link_struk, 'Menunggu Verifikasi', '-'))
-                        conn.commit()
+                        with st.spinner("Mengunggah data laporan struk..."):
+                            time.sleep(0.7)
+                            c = conn.cursor()
+                            c.execute("UPDATE req_bbm SET link_struk = ?, status_laporan = 'Menunggu Verifikasi' WHERE id = ?", (link_struk, pilihan_st))
+                            no_lap = f"LAP-{str(uuid.uuid4())[:4]}"
+                            c.execute("INSERT INTO laporan_bbm (no_laporan, no_st, tanggal_struk, jenis_bbm, jumlah_liter, total_rp, link_struk, status_laporan, alasan_tolak) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                      (no_lap, pilihan_st, tgl_struk.strftime("%Y-%m-%d"), jenis_bbm, liter_aktual, liter_aktual * HARGA_BBM, link_struk, 'Menunggu Verifikasi', '-'))
+                            conn.commit()
                         st.success("✅ Struk berhasil dilaporkan!")
+                        time.sleep(0.5)
                         st.rerun()
 
     elif menu == "Riwayat Unit":
@@ -374,12 +399,16 @@ elif st.session_state.role == "superadmin":
                 
             if st.form_submit_button("Simpan Restok", type="primary"):
                 if pilihan_barang != "-- Pilih --" and link_bukti:
-                    c.execute("UPDATE barang SET jumlah = jumlah + ?, last_updated = ? WHERE nama = ?", 
-                              (jumlah_masuk, datetime.date.today().strftime("%Y-%m-%d"), pilihan_barang))
-                    c.execute("INSERT INTO log_restok (tanggal, kategori, item, jumlah, link_bukti) VALUES (?, ?, ?, ?, ?)",
-                              (datetime.date.today().strftime("%Y-%m-%d"), "Restok Barang", pilihan_barang, jumlah_masuk, link_bukti))
-                    conn.commit()
+                    with st.spinner("Memperbarui stok barang..."):
+                        time.sleep(0.7)
+                        c.execute("UPDATE barang SET jumlah = jumlah + ?, last_updated = ? WHERE nama = ?", 
+                                  (jumlah_masuk, datetime.date.today().strftime("%Y-%m-%d"), pilihan_barang))
+                        c.execute("INSERT INTO log_restok (tanggal, kategori, item, jumlah, link_bukti) VALUES (?, ?, ?, ?, ?)",
+                                  (datetime.date.today().strftime("%Y-%m-%d"), "Restok Barang", pilihan_barang, jumlah_masuk, link_bukti))
+                        conn.commit()
                     st.success(f"✅ Stok {pilihan_barang} berhasil ditambah!")
+                    time.sleep(0.5)
+                    st.rerun()
                 else:
                     st.error("Isi semua data restok!")
 
@@ -398,9 +427,13 @@ elif st.session_state.role == "superadmin":
                 
             if st.form_submit_button("Simpan Jenis Baru", type="primary"):
                 if kode and nama_barang:
-                    c.execute("INSERT INTO barang VALUES (?, ?, ?, ?, ?, ?)", (kode, nama_barang, kategori, jumlah, satuan, datetime.date.today().strftime("%Y-%m-%d")))
-                    conn.commit()
+                    with st.spinner("Menambahkan jenis barang baru..."):
+                        time.sleep(0.7)
+                        c.execute("INSERT INTO barang VALUES (?, ?, ?, ?, ?, ?)", (kode, nama_barang, kategori, jumlah, satuan, datetime.date.today().strftime("%Y-%m-%d")))
+                        conn.commit()
                     st.success(f"✅ {nama_barang} ditambahkan!")
+                    time.sleep(0.5)
+                    st.rerun()
 
     elif menu == "Restok BBM":
         st.title("Restok Saldo BBM (Liter)")
@@ -413,11 +446,14 @@ elif st.session_state.role == "superadmin":
             
             if st.form_submit_button("Tambahkan Saldo", type="primary"):
                 if link_bukti:
-                    c.execute("UPDATE settings SET value = value + ? WHERE key = 'total_liter_bbm'", (liter_masuk,))
-                    c.execute("INSERT INTO log_restok (tanggal, kategori, item, jumlah, link_bukti) VALUES (?, ?, ?, ?, ?)",
-                              (datetime.date.today().strftime("%Y-%m-%d"), "Restok BBM", "BBM", liter_masuk, link_bukti))
-                    conn.commit()
+                    with st.spinner("Menambahkan saldo BBM ke sistem..."):
+                        time.sleep(0.7)
+                        c.execute("UPDATE settings SET value = value + ? WHERE key = 'total_liter_bbm'", (liter_masuk,))
+                        c.execute("INSERT INTO log_restok (tanggal, kategori, item, jumlah, link_bukti) VALUES (?, ?, ?, ?, ?)",
+                                  (datetime.date.today().strftime("%Y-%m-%d"), "Restok BBM", "BBM", liter_masuk, link_bukti))
+                        conn.commit()
                     st.success(f"✅ Ditambahkan {liter_masuk} Liter BBM!")
+                    time.sleep(0.5)
                     st.rerun()
 
     elif menu == "Verifikasi Barang":
@@ -454,17 +490,23 @@ elif st.session_state.role == "superadmin":
             
             col1, col2 = st.columns(2)
             if col1.button("✅ Setujui", type="primary", disabled=not can_approve, use_container_width=True):
-                c.execute("UPDATE req_barang SET status = 'Disetujui', alasan_tolak = '-' WHERE id = ?", (req['id'],))
-                c.execute("UPDATE barang SET jumlah = jumlah - ? WHERE nama = ?", (req['jumlah'], req['barang']))
-                conn.commit()
-                st.success("Disetujui!")
+                with st.spinner("Memproses persetujuan dan memotong stok..."):
+                    time.sleep(0.7)
+                    c.execute("UPDATE req_barang SET status = 'Disetujui', alasan_tolak = '-' WHERE id = ?", (req['id'],))
+                    c.execute("UPDATE barang SET jumlah = jumlah - ? WHERE nama = ?", (req['jumlah'], req['barang']))
+                    conn.commit()
+                st.success("Permintaan berhasil Disetujui!")
+                time.sleep(0.5)
                 st.rerun()
                 
             if col2.button("❌ Tolak", use_container_width=True):
-                if not alasan: alasan = "Ditolak oleh Admin"
-                c.execute("UPDATE req_barang SET status = 'Ditolak', alasan_tolak = ? WHERE id = ?", (alasan, req['id']))
-                conn.commit()
-                st.warning("Ditolak!")
+                with st.spinner("Memproses penolakan permintaan..."):
+                    time.sleep(0.7)
+                    if not alasan: alasan = "Ditolak oleh Admin"
+                    c.execute("UPDATE req_barang SET status = 'Ditolak', alasan_tolak = ? WHERE id = ?", (alasan, req['id']))
+                    conn.commit()
+                st.warning("Permintaan ditolak.")
+                time.sleep(0.5)
                 st.rerun()
 
     elif menu == "Verifikasi BBM":
@@ -493,14 +535,22 @@ elif st.session_state.role == "superadmin":
                 
                 c1, c2 = st.columns(2)
                 if c1.button("✅ Setujui ST", type="primary", disabled=not can_approve, use_container_width=True):
-                    c.execute("UPDATE settings SET value = value - ? WHERE key = 'total_liter_bbm'", (req_st['liter'],))
-                    c.execute("UPDATE req_bbm SET status = 'Disetujui', alasan_tolak = '-' WHERE id = ?", (req_st['id'],))
-                    conn.commit()
+                    with st.spinner("Menyetujui Surat Tugas dan mengurangi saldo..."):
+                        time.sleep(0.7)
+                        c.execute("UPDATE settings SET value = value - ? WHERE key = 'total_liter_bbm'", (req_st['liter'],))
+                        c.execute("UPDATE req_bbm SET status = 'Disetujui', alasan_tolak = '-' WHERE id = ?", (req_st['id'],))
+                        conn.commit()
+                    st.success("Surat Tugas disetujui!")
+                    time.sleep(0.5)
                     st.rerun()
                 if c2.button("❌ Tolak ST", use_container_width=True):
-                    if not alasan_st: alasan_st = "Ditolak"
-                    c.execute("UPDATE req_bbm SET status = 'Ditolak', alasan_tolak = ? WHERE id = ?", (alasan_st, req_st['id']))
-                    conn.commit()
+                    with st.spinner("Menolak Surat Tugas..."):
+                        time.sleep(0.7)
+                        if not alasan_st: alasan_st = "Ditolak"
+                        c.execute("UPDATE req_bbm SET status = 'Ditolak', alasan_tolak = ? WHERE id = ?", (alasan_st, req_st['id']))
+                        conn.commit()
+                    st.warning("Surat Tugas ditolak.")
+                    time.sleep(0.5)
                     st.rerun()
 
         with tab2:
@@ -508,7 +558,6 @@ elif st.session_state.role == "superadmin":
             if df_lap.empty:
                 st.info("Tidak ada laporan struk baru.")
             else:
-                # Tampilkan tabel laporan dengan link yang diformat aman
                 df_lap_display = df_lap.copy()
                 st.dataframe(df_lap_display, use_container_width=True, hide_index=True)
                 st.markdown("---")
@@ -517,8 +566,6 @@ elif st.session_state.role == "superadmin":
                 req_lap = df_lap[df_lap['no_laporan'] == selected_lap].iloc[0]
                 
                 st.write(f"Nomor ST: **{req_lap['no_st']}** | Liter Aktual: **{req_lap['jumlah_liter']}**")
-                
-                # Gunakan fungsi format_url agar aman dari localhost path issue
                 safe_url = format_url(req_lap['link_struk'])
                 st.markdown(f"📄 [Klik untuk Lihat Bukti Struk]({safe_url})")
                 
@@ -526,15 +573,23 @@ elif st.session_state.role == "superadmin":
                 
                 c1, c2 = st.columns(2)
                 if c1.button("✅ Validasi Sesuai", type="primary", use_container_width=True):
-                    c.execute("UPDATE laporan_bbm SET status_laporan = 'Selesai' WHERE no_laporan = ?", (req_lap['no_laporan'],))
-                    c.execute("UPDATE req_bbm SET status_laporan = 'Selesai' WHERE id = ?", (req_lap['no_st'],))
-                    conn.commit()
+                    with st.spinner("Memvalidasi struk BBM..."):
+                        time.sleep(0.7)
+                        c.execute("UPDATE laporan_bbm SET status_laporan = 'Selesai' WHERE no_laporan = ?", (req_lap['no_laporan'],))
+                        c.execute("UPDATE req_bbm SET status_laporan = 'Selesai' WHERE id = ?", (req_lap['no_st'],))
+                        conn.commit()
+                    st.success("Struk berhasil divalidasi!")
+                    time.sleep(0.5)
                     st.rerun()
                 if c2.button("❌ Tolak Struk", use_container_width=True):
-                    if not alasan_lap: alasan_lap = "Struk tidak valid"
-                    c.execute("UPDATE laporan_bbm SET status_laporan = 'Ditolak', alasan_tolak = ? WHERE no_laporan = ?", (alasan_lap, req_lap['no_laporan']))
-                    c.execute("UPDATE req_bbm SET status_laporan = 'Ditolak', link_struk = '' WHERE id = ?", (req_lap['no_st'],))
-                    conn.commit()
+                    with st.spinner("Menolak struk BBM..."):
+                        time.sleep(0.7)
+                        if not alasan_lap: alasan_lap = "Struk tidak valid"
+                        c.execute("UPDATE laporan_bbm SET status_laporan = 'Ditolak', alasan_tolak = ? WHERE no_laporan = ?", (alasan_lap, req_lap['no_laporan']))
+                        c.execute("UPDATE req_bbm SET status_laporan = 'Ditolak', link_struk = '' WHERE id = ?", (req_lap['no_st'],))
+                        conn.commit()
+                    st.warning("Struk ditolak.")
+                    time.sleep(0.5)
                     st.rerun()
 
     elif menu == "Laporan":
