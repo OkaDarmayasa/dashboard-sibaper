@@ -1,0 +1,5 @@
+venv/
+__pycache__/
+.streamlit/
+sibaper.db
+.DS_Store
